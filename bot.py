@@ -30,6 +30,7 @@ import csv
 import io
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -121,6 +122,15 @@ async def dm_owner(text: str) -> None:
         await user.send(text[:1900])
     except Exception as e:
         logger.error(f"Could not DM owner: {e}")
+
+
+def server_slug(interaction: discord.Interaction) -> str:
+    """A filesystem-safe fragment of the server name for export filenames, so a CSV is
+    identifiable by community at a glance (the bare guild_id is not). Falls back to the
+    guild_id when the name has no usable characters."""
+    name = interaction.guild.name if interaction.guild else ""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")[:40]
+    return slug or str(interaction.guild_id)
 
 
 def is_operator(interaction: discord.Interaction) -> bool:
@@ -623,7 +633,7 @@ async def exportwinners(interaction: discord.Interaction, top: int = 20,
 
     data = io.BytesIO(buf.getvalue().encode("utf-8"))
     suffix = f"_{stage.value}" if stage else ""
-    file = discord.File(data, filename=f"wc_winners_{gid}{suffix}.csv")
+    file = discord.File(data, filename=f"wc_winners_{server_slug(interaction)}{suffix}.csv")
     label = f" ({stage.name})" if stage else ""
     await interaction.followup.send(
         f"✅ Top {len(rows)} winners{label} exported.", file=file, ephemeral=True)
@@ -713,7 +723,7 @@ async def championwinners(interaction: discord.Interaction, role: discord.Role |
                 failed += 1
 
     data = io.BytesIO(buf.getvalue().encode("utf-8"))
-    file = discord.File(data, filename=f"wc_champion_winners_{gid}.csv")
+    file = discord.File(data, filename=f"wc_champion_winners_{server_slug(interaction)}.csv")
     msg = f"🏆 Champion: **{team}** — {len(user_ids)} player(s) called it."
     if role:
         msg += f" Gave **{role.name}** to {given}."
