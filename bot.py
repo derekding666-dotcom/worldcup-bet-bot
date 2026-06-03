@@ -378,8 +378,10 @@ async def mybets(interaction: discord.Interaction):
             ephemeral=True)
         return
 
+    # Newest first (user_bets is oldest→newest): in the back half of the tournament a
+    # player has dozens of picks, and the recent / knockout ones are what they care about.
     lines = []
-    for r in rows:
+    for r in reversed(rows):
         pick_label = panels.outcome_label(r, r["pick"])
         suffix = ""
         if r["result"] is None:
@@ -391,9 +393,31 @@ async def mybets(interaction: discord.Interaction):
             suffix = f" (result: {panels.outcome_label(r, r['result'])})"
         lines.append(f"{mark} {r['home']} vs {r['away']} — you picked **{pick_label}**{suffix}")
 
+    # Summary header: total picks + (once anything has settled) correct/score/rank.
+    standing = await asyncio.to_thread(db.user_standing, gid, uid)
+    if standing:
+        summary = (f"**{len(rows)}** prediction(s) · ✅ {standing['correct']}/{standing['settled']} "
+                   f"settled correct · **{standing['score']}** pts · "
+                   f"rank #{standing['rank']}/{standing['total']}")
+    else:
+        summary = f"**{len(rows)}** prediction(s) · nothing settled yet — check back after kickoff."
+
+    # Fit as many (newest) lines as the embed description allows (Discord cap is 4096).
+    DESC_BUDGET = 3900
+    body, used, shown = [], len(summary) + 2, 0
+    for ln in lines:
+        if used + len(ln) + 1 > DESC_BUDGET:
+            break
+        body.append(ln)
+        used += len(ln) + 1
+        shown += 1
+    desc = summary + ("\n\n" + "\n".join(body) if body else "")
+    hidden = len(rows) - shown
+    if hidden > 0:
+        desc += f"\n\n…and {hidden} more (showing your {shown} most recent)."
+
     emb = discord.Embed(title="📋 Your World Cup Predictions",
-                        description="\n".join(lines[:40]) or "No match predictions yet.",
-                        color=panels.EMBED_COLOR)
+                        description=desc, color=panels.EMBED_COLOR)
 
     if champ:
         winner = await asyncio.to_thread(db.champion_team)
