@@ -1,0 +1,25 @@
+# systemd unit for the World Cup prediction bot (Warpath VPS).
+# Install:
+#   sudo cp deploy/worldcup-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now worldcup-bot
+# Logs:  journalctl -u worldcup-bot -f
+# Edit WorkingDirectory / User below to match where you cloned the repo.
+
+[Unit]
+Description=World Cup Prediction Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/opt/worldcup-bet-bot
+ExecStart=/opt/worldcup-bet-bot/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+# Reads DISCORD_TOKEN / FOOTBALL_API_KEY etc. from the project's .env file.
+EnvironmentFile=/opt/worldcup-bet-bot/.env
+
+[Install]
+WantedBy=multi-user.target

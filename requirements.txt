@@ -1,0 +1,11 @@
+# Core
+discord.py>=2.4
+aiohttp>=3.9
+python-dotenv
+
+# Optional — only needed if you push the winner list to Feishu (lark)
+# lark-oapi
+
+# Tests
+pytest
+pytest-asyncio
