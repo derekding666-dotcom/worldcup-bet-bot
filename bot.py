@@ -302,16 +302,20 @@ async def daily_panel_loop():
         if row["last_posted"] == today:
             continue
         guild_id = row["guild_id"]
+        # Claim the day BEFORE posting. If a send fails partway (lost permission,
+        # transient API error) this guarantees we never re-post duplicate panels or
+        # re-DM the owner every 60s. The trade-off: a transient failure forfeits
+        # today's auto-post for this guild — an admin can /postpanel to recover.
+        await asyncio.to_thread(db.set_daily_posted, guild_id, today)
         try:
             channel = bot.get_channel(int(row["channel_id"])) \
                 or await bot.fetch_channel(int(row["channel_id"]))
         except Exception as e:
             logger.error(f"daily channel unavailable for guild {guild_id}: {e}")
-            continue  # transient? retry next tick rather than skip the day
+            continue
 
         try:
             n = await post_day_panels(channel, guild_id, today)
-            await asyncio.to_thread(db.set_daily_posted, guild_id, today)
             if n:
                 logger.info(f"daily auto-post: {n} match panel(s) to guild {guild_id} for {today}")
         except Exception as e:
