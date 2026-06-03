@@ -62,23 +62,68 @@ For fast slash-command testing in one server, set `TEST_GUILD_ID=<your server id
 
 ## Commands
 
-**Players**
-- `/leaderboard [top]` — this server's standings (+ your own rank in the footer)
-- `/mybets` — your predictions and how they did (ephemeral)
+Command names are deliberately namespaced (`/bet`, `/wcleaderboard`) to avoid clashing
+with other bots' generic commands in the same server.
 
-**Admins** (the `OWNER_ID` user, or anyone with a role in `ADMIN_ROLES`)
-- `/syncfixtures` — pull fixtures & results from the API (also runs automatically)
+**Players**
+- `/bet [date]` — privately pull up upcoming matches and predict (defaults to the next
+  24h of still-open matches; pass a UTC date to see a specific day). Use it if you missed
+  the daily panel — the reply is ephemeral, so it never floods the channel.
+- `/wcleaderboard [top] [stage]` — this server's standings (+ your own rank in the footer).
+  Pass `stage` to see a single round's board (Group / R32 / R16 / QF / SF).
+- `/mybets` — your predictions and how they did, plus your champion pick (ephemeral)
+- `/champion <team>` — pick the team you think wins the whole tournament. Locks at the
+  first kickoff; changeable until then (autocomplete lists the teams).
+
+**Server admins** — anyone with Discord's **Manage Server** permission (works in every
+server with no setup), plus the operator and anyone holding a role named in `ADMIN_ROLES`.
+These commands only ever touch **their own server's** data:
 - `/postpanel [date]` — post the prediction panel for a UTC date (default: today)
-- `/setresult <match_id> <HOME|DRAW|AWAY>` — manually set/correct a result (overrides API)
-- `/exportwinners [top]` — CSV of winners (for handing out prize codes)
-- `/giverole <role> [top]` — give a role to the current top N (needs Manage Roles)
+- `/setdailychannel` — register the current channel for daily auto-posts: every day at
+  `DAILY_POST_HOUR_UTC` (default 09:00 UTC) the bot posts that day's fixtures here, with
+  a short call-to-vote intro. Rest days (no matches) are skipped automatically.
+- `/cleardailychannel` — stop the daily auto-post in this server
+- `/exportwinners [top] [stage]` — CSV of winners (for prize codes); `stage` scopes it to
+  one round
+- `/giverole <role> [top] [stage]` — give a role to the current top N (needs Manage Roles);
+  `stage` ranks by one round
+- `/championwinners [role]` — once the Final is settled, list everyone who picked the
+  champion correctly (CSV), and optionally give them a role
+
+**Operator only** — just the `OWNER_ID` user. Fixtures and results are **shared across all
+servers**, so only the operator may change them (a per-server admin must never be able to
+corrupt everyone's results):
+- `/syncfixtures` — pull fixtures & results from the API (also runs automatically)
+- `/setresult <match_id> <HOME|DRAW|AWAY>` — manually set/correct a result (overrides API,
+  affects every server's leaderboard)
+
+Each fixture posts as its **own message** so the bet buttons always sit directly under
+the match they belong to (no ambiguity about which "Draw" is which).
 
 ## Typical run-of-show
 
 1. `/syncfixtures` once before the tournament (and the loop keeps it fresh).
-2. Each match day: `/postpanel` in your predictions channel.
+2. `/setdailychannel` once in your predictions channel — from then on the day's panels
+   post automatically each morning. (Or `/postpanel [date]` manually any time.)
 3. Results settle automatically; optionally set `RESULT_CHANNEL_ID` for live result posts.
-4. At the end: `/exportwinners` for prize codes, `/giverole` for a winner role.
+4. Before kickoff, nudge players to `/champion` their tournament winner.
+5. At the end: `/exportwinners` for prize codes, `/giverole` for a winner role.
+
+## Rewards
+
+Three parallel tracks keep different kinds of players engaged across the whole tournament
+(so falling behind on the overall board isn't game-over):
+
+| Track | Who wins | How to award |
+|-------|----------|--------------|
+| 🏆 **Overall Top 10** | best total score at the end | `/exportwinners top:10` → prize codes; `/giverole <role> top:10` → champion role |
+| 📅 **Per-stage Top 5** | best in each round: Group / R32 / R16 / QF / SF | same commands with `stage`, e.g. `/exportwinners stage:"Round of 16" top:5`, `/giverole <role> stage:"Round of 16" top:5` |
+| 🔮 **Champion pick** | everyone who picked the eventual winner (chosen pre-kickoff via `/champion`) | after the Final settles: `/championwinners role:<role>` lists them and assigns the role |
+
+Notes: stage scoring uses the raw API stage (`matches.stage_detail`); the Final and 3rd-place
+playoff don't get a separate stage prize but still count toward the overall board. Scoring
+weights live in `.env` (`POINTS_GROUP` / `POINTS_KNOCKOUT`). Ties at a Top-N cut (e.g. several
+players level on 5th) are the operator's call.
 
 ## Deploy on the VPS (Linux)
 

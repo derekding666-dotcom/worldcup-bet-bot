@@ -18,8 +18,9 @@ def db(tmp_path):
 
 
 def _match(mid, stage="GROUP", result=None, status="SCHEDULED",
-           ko="2026-06-11T18:00:00Z"):
-    return {"match_id": mid, "stage": stage, "home": "A", "away": "B",
+           ko="2026-06-11T18:00:00Z", stage_detail=None, home="A", away="B"):
+    return {"match_id": mid, "stage": stage, "stage_detail": stage_detail,
+            "home": home, "away": away,
             "kickoff_utc": ko, "status": status, "result": result}
 
 
@@ -75,3 +76,89 @@ def test_user_standing_rank(db):
     s = db.user_standing("g1", "winner")
     assert s["rank"] == 1 and s["score"] == 1
     assert db.user_standing("g1", "nobody") is None
+
+
+def test_stage_filtered_leaderboard(db):
+    db.upsert_matches([
+        _match(1, stage="GROUP", stage_detail="GROUP_STAGE", result="HOME", status="FINISHED"),
+        _match(2, stage="KNOCKOUT", stage_detail="LAST_16", result="AWAY", status="FINISHED"),
+    ])
+    db.place_bet("g1", "u1", 1, "HOME")   # correct (group)
+    db.place_bet("g1", "u1", 2, "AWAY")   # correct (R16)
+    db.place_bet("g1", "u2", 1, "HOME")   # correct (group)
+    db.place_bet("g1", "u2", 2, "HOME")   # wrong (R16)
+
+    overall = {r["user_id"]: r["score"] for r in db.leaderboard("g1", 10)}
+    assert overall == {"u1": 2, "u2": 1}
+
+    group = {r["user_id"]: r["score"] for r in db.leaderboard("g1", 10, ["GROUP_STAGE"])}
+    assert group == {"u1": 1, "u2": 1}
+
+    r16 = {r["user_id"]: r["score"] for r in db.leaderboard("g1", 10, ["LAST_16"])}
+    assert r16 == {"u1": 1, "u2": 0}  # u2 settled in R16 but wrong → score 0, still listed
+
+
+def test_participating_teams_excludes_tbd(db):
+    db.upsert_matches([
+        _match(1, home="Brazil", away="France"),
+        _match(2, stage="KNOCKOUT", stage_detail="FINAL", home="TBD", away="TBD"),
+    ])
+    assert db.participating_teams() == ["Brazil", "France"]
+
+
+def test_tournament_start_is_earliest(db):
+    db.upsert_matches([
+        _match(1, ko="2026-06-12T02:00:00Z"),
+        _match(2, ko="2026-06-11T19:00:00Z"),
+    ])
+    assert db.tournament_start() == "2026-06-11T19:00:00Z"
+
+
+def test_champion_pick_and_winners(db):
+    db.set_champion_pick("g1", "u1", "Brazil")
+    db.set_champion_pick("g1", "u1", "France")  # change pick (overwrite)
+    assert db.get_champion_pick("g1", "u1") == "France"
+    db.set_champion_pick("g1", "u2", "France")
+    db.set_champion_pick("g2", "u3", "France")  # other guild
+
+    assert db.champion_winners("g1", "France") == ["u1", "u2"]  # per-guild, by created_at
+    assert db.champion_winners("g2", "France") == ["u3"]
+    assert db.champion_winners("g1", "Brazil") == []
+
+
+def test_champion_team_from_final(db):
+    db.upsert_matches([_match(99, stage="KNOCKOUT", stage_detail="FINAL",
+                              home="France", away="Brazil")])
+    assert db.champion_team() is None  # not settled yet
+    db.upsert_matches([_match(99, stage="KNOCKOUT", stage_detail="FINAL",
+                              home="France", away="Brazil", result="HOME", status="FINISHED")])
+    assert db.champion_team() == "France"
+
+
+def test_matches_in_window(db):
+    db.upsert_matches([
+        _match(1, ko="2026-06-12T02:00:00Z"),
+        _match(2, ko="2026-06-12T20:00:00Z"),
+        _match(3, ko="2026-06-15T02:00:00Z"),  # outside the window
+    ])
+    rows = db.matches_in_window("2026-06-12T00:00:00Z", "2026-06-13T00:00:00Z")
+    assert [r["match_id"] for r in rows] == [1, 2]  # ordered by kickoff, #3 excluded
+
+
+def test_daily_channel_register_move_clear(db):
+    # register, then move to another channel (one row per guild, last_posted preserved)
+    db.set_daily_channel("g1", "chan_a")
+    db.set_daily_posted("g1", "2026-06-12")
+    db.set_daily_channel("g1", "chan_b")  # move channel
+    rows = {r["guild_id"]: r for r in db.all_daily_channels()}
+    assert rows["g1"]["channel_id"] == "chan_b"
+    assert rows["g1"]["last_posted"] == "2026-06-12"  # not reset → no double-post today
+
+    # per-guild isolation
+    db.set_daily_channel("g2", "chan_c")
+    assert len(db.all_daily_channels()) == 2
+
+    # clear
+    assert db.clear_daily_channel("g1") is True
+    assert db.clear_daily_channel("g1") is False  # already gone
+    assert {r["guild_id"] for r in db.all_daily_channels()} == {"g2"}

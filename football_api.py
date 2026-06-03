@@ -75,10 +75,16 @@ def derive_result(match: dict) -> str | None:
 
 
 def normalize_match(match: dict) -> dict:
-    """PURE: reduce a raw API match to the fields we persist."""
+    """PURE: reduce a raw API match to the fields we persist.
+
+    `stage` is the coarse GROUP/KNOCKOUT used for panel button logic; `stage_detail`
+    keeps the raw API stage (GROUP_STAGE/LAST_32/LAST_16/QUARTER_FINALS/SEMI_FINALS/
+    THIRD_PLACE/FINAL) so we can score per-stage prizes.
+    """
     return {
         "match_id": match["id"],
         "stage": classify_stage(match.get("stage")),
+        "stage_detail": (match.get("stage") or "").upper(),
         "home": (match.get("homeTeam") or {}).get("name") or "TBD",
         "away": (match.get("awayTeam") or {}).get("name") or "TBD",
         "kickoff_utc": match.get("utcDate"),

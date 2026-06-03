@@ -48,6 +48,13 @@ def test_knockout_uses_winner_never_draw():
 def test_normalize_match():
     n = fa.normalize_match(_group(h=2, a=1))
     assert n == {
-        "match_id": 1, "stage": "GROUP", "home": "Mexico", "away": "France",
+        "match_id": 1, "stage": "GROUP", "stage_detail": "GROUP_STAGE",
+        "home": "Mexico", "away": "France",
         "kickoff_utc": "2026-06-11T18:00:00Z", "status": "FINISHED", "result": "HOME",
     }
+
+
+def test_normalize_keeps_fine_stage():
+    # Knockout fine stage is preserved for per-stage prizes (coarse stage collapses to KNOCKOUT).
+    n = fa.normalize_match(_ko(winner="HOME_TEAM", stage="LAST_32"))
+    assert n["stage"] == "KNOCKOUT" and n["stage_detail"] == "LAST_32"

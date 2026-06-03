@@ -32,6 +32,11 @@ POINTS_KNOCKOUT = int(os.getenv("POINTS_KNOCKOUT", "1"))
 SETTLE_INTERVAL_SEC = int(os.getenv("SETTLE_INTERVAL_SEC", "900"))
 RESULT_CHANNEL_ID = os.getenv("RESULT_CHANNEL_ID", "").strip()
 
+# ── Daily auto-post ────────────────────────────────────────────────────────
+# Hour (UTC, 0–23) at which the bot auto-posts each day's fixtures to channels
+# registered via /setdailychannel. "Today" is the UTC calendar date.
+DAILY_POST_HOUR_UTC = int(os.getenv("DAILY_POST_HOUR_UTC", "9"))
+
 # ── Feishu export (optional) ───────────────────────────────────────────────
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "").strip()
 FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "").strip()
