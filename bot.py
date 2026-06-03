@@ -178,28 +178,42 @@ async def settle_loop():
         return
 
     newly = await asyncio.to_thread(db.upsert_matches, matches)
-    if not newly or not config.RESULT_CHANNEL_ID:
+    if not newly:
         return
 
-    try:
-        channel = bot.get_channel(int(config.RESULT_CHANNEL_ID)) \
-            or await bot.fetch_channel(int(config.RESULT_CHANNEL_ID))
-    except Exception as e:
-        logger.error(f"result channel unavailable: {e}")
+    # Broadcast each newly-settled match to every server's registered channel (the same
+    # channel as its daily panels), with that server's own correct-count.
+    channels = await asyncio.to_thread(db.all_daily_channels)
+    if not channels:
         return
 
-    guild_id = str(channel.guild.id)
+    settled = []
     for mid in newly:
         m = await asyncio.to_thread(db.get_match, mid)
-        if not m or not m["result"]:
+        if m and m["result"]:
+            settled.append(m)
+    if not settled:
+        return
+
+    for row in channels:
+        gid = row["guild_id"]
+        try:
+            channel = bot.get_channel(int(row["channel_id"])) \
+                or await bot.fetch_channel(int(row["channel_id"]))
+        except Exception as e:
+            logger.error(f"result channel unavailable for guild {gid}: {e}")
             continue
-        counts = await asyncio.to_thread(db.bet_counts, guild_id, mid)
-        correct = counts.get(m["result"], 0)
-        outcome = _result_team(m, m["result"])
-        await channel.send(
-            f"🏁 **{m['home']} vs {m['away']}** — result: **{outcome}** "
-            f"({RESULT_LABELS[m['result']]}). {correct:,} correct in this server."
-        )
+        for m in settled:
+            counts = await asyncio.to_thread(db.bet_counts, gid, m["match_id"])
+            correct = counts.get(m["result"], 0)
+            outcome = _result_team(m, m["result"])
+            try:
+                await channel.send(
+                    f"🏁 **{m['home']} vs {m['away']}** — result: **{outcome}** "
+                    f"({RESULT_LABELS[m['result']]}). {correct:,} correct in this server."
+                )
+            except Exception as e:
+                logger.error(f"result broadcast failed for guild {gid}: {e}")
 
 
 @settle_loop.before_loop
@@ -521,7 +535,7 @@ async def postpanel(interaction: discord.Interaction, date: str | None = None):
 
 @bot.tree.command(
     name="setdailychannel",
-    description="(Admin) Auto-post each day's fixtures to THIS channel every day")
+    description="(Admin) Use THIS channel for daily fixture panels AND result broadcasts")
 @app_commands.default_permissions(manage_guild=True)
 @server_admin_only()
 async def setdailychannel(interaction: discord.Interaction):
@@ -531,15 +545,16 @@ async def setdailychannel(interaction: discord.Interaction):
     await asyncio.to_thread(
         db.set_daily_channel, str(interaction.guild_id), str(interaction.channel_id))
     await interaction.response.send_message(
-        f"✅ Daily posts set to <#{interaction.channel_id}>. Each day at "
-        f"**{config.DAILY_POST_HOUR_UTC:02d}:00 UTC** I'll post that day's matches here "
-        "(rest days with no matches are skipped).",
+        f"✅ This server's World Cup channel is now <#{interaction.channel_id}>:\n"
+        f"• each day at **{config.DAILY_POST_HOUR_UTC:02d}:00 UTC** I post that day's match "
+        "panels here (rest days skipped);\n"
+        "• match results are also broadcast here as they settle.",
         ephemeral=True)
 
 
 @bot.tree.command(
     name="cleardailychannel",
-    description="(Admin) Stop the daily auto-post in this server")
+    description="(Admin) Stop daily panels AND result broadcasts in this server")
 @app_commands.default_permissions(manage_guild=True)
 @server_admin_only()
 async def cleardailychannel(interaction: discord.Interaction):
@@ -548,8 +563,8 @@ async def cleardailychannel(interaction: discord.Interaction):
         return
     ok = await asyncio.to_thread(db.clear_daily_channel, str(interaction.guild_id))
     await interaction.response.send_message(
-        "✅ Daily auto-post stopped for this server."
-        if ok else "This server has no daily auto-post channel set.",
+        "✅ Stopped daily panels and result broadcasts for this server."
+        if ok else "This server has no World Cup channel set.",
         ephemeral=True)
 
 

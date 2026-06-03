@@ -79,10 +79,11 @@ with other bots' generic commands in the same server.
 server with no setup), plus the operator and anyone holding a role named in `ADMIN_ROLES`.
 These commands only ever touch **their own server's** data:
 - `/postpanel [date]` — post the prediction panel for a UTC date (default: today)
-- `/setdailychannel` — register the current channel for daily auto-posts: every day at
-  `DAILY_POST_HOUR_UTC` (default 09:00 UTC) the bot posts that day's fixtures here, with
-  a short call-to-vote intro. Rest days (no matches) are skipped automatically.
-- `/cleardailychannel` — stop the daily auto-post in this server
+- `/setdailychannel` — set the current channel as this server's World Cup channel. Two
+  things post here: (1) the daily fixture panels every day at `DAILY_POST_HOUR_UTC`
+  (default 09:00 UTC), with a short call-to-vote intro (rest days skipped); (2) match
+  result broadcasts as games settle (`🏁 … — N correct in this server`).
+- `/cleardailychannel` — stop both the daily panels and the result broadcasts here
 - `/exportwinners [top] [stage]` — CSV of winners (for prize codes); `stage` scopes it to
   one round
 - `/giverole <role> [top] [stage]` — give a role to the current top N (needs Manage Roles);
@@ -104,8 +105,9 @@ the match they belong to (no ambiguity about which "Draw" is which).
 
 1. `/syncfixtures` once before the tournament (and the loop keeps it fresh).
 2. `/setdailychannel` once in your predictions channel — from then on the day's panels
-   post automatically each morning. (Or `/postpanel [date]` manually any time.)
-3. Results settle automatically; optionally set `RESULT_CHANNEL_ID` for live result posts.
+   post automatically each morning, and match results are broadcast there as they settle.
+   (Or `/postpanel [date]` manually any time.)
+3. Results settle automatically in the background (and post to the channel above).
 4. Before kickoff, nudge players to `/champion` their tournament winner.
 5. At the end: `/exportwinners` for prize codes, `/giverole` for a winner role.
 

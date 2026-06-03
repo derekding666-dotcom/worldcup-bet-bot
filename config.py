@@ -30,7 +30,8 @@ POINTS_KNOCKOUT = int(os.getenv("POINTS_KNOCKOUT", "1"))
 
 # ── Settlement loop ────────────────────────────────────────────────────────
 SETTLE_INTERVAL_SEC = int(os.getenv("SETTLE_INTERVAL_SEC", "900"))
-RESULT_CHANNEL_ID = os.getenv("RESULT_CHANNEL_ID", "").strip()
+# Result broadcasts go to each server's channel registered via /setdailychannel
+# (same channel as the daily panels) — there is no single global result channel.
 
 # ── Daily auto-post ────────────────────────────────────────────────────────
 # Hour (UTC, 0–23) at which the bot auto-posts each day's fixtures to channels
