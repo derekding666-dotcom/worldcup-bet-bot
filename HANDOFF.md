@@ -79,14 +79,76 @@ Discord allows only one healthy gateway connection per bot token at a time. **Be
 running at home, make sure no other copy is running** (this dev machine, or the VPS).
 Two instances will both respond to interactions and behave erratically.
 
-## 6. Reference
+## 6. Running in production (the VPS)
+
+Live on a Debian VPS at `/opt/worldcup-bet-bot`, run by systemd as the unit
+`worldcup-bot` (User=root, `Restart=always`, starts on boot). SSH in with
+`ssh root@<vps-ip>`, then everything below runs from `/opt/worldcup-bet-bot`.
+
+Handy commands:
+```bash
+systemctl status worldcup-bot          # is it running?
+systemctl restart worldcup-bot         # restart it
+journalctl -u worldcup-bot -n 50       # last 50 log lines (q to quit)
+journalctl -u worldcup-bot -f          # follow logs live (Ctrl-C to stop)
+```
+
+### Hot-fixing code while it's live — data is NOT affected
+
+Code and data are separate: the DB (`data/worldcup.db`) is gitignored, so `git pull`
+only touches code, never bets/leaderboards/champion picks. Scores are *derived* (a join,
+not a running total), so a restart can never lose or double-count points. New columns are
+added by non-destructive `ALTER TABLE` in `init_db()`, preserving existing rows.
+
+Standard fix flow (after the change is committed + pushed from a dev machine):
+```bash
+cd /opt/worldcup-bet-bot
+git pull
+systemctl restart worldcup-bot
+systemctl status worldcup-bot          # confirm: active (running)
+```
+The only cost is a ~2–3 s gap during restart: a button tap in that window shows
+"application did not respond", but nothing is lost (SQLite writes are durable) — the
+player just taps again. Prefer a low-traffic moment (no live match) for the restart.
+
+### Rollback if a new commit won't start
+
+`systemctl status` shows `failed` / `activating (auto-restart)` and `journalctl` shows the
+traceback. Roll back to the previous commit and restart:
+```bash
+cd /opt/worldcup-bet-bot
+git reset --hard HEAD~1
+systemctl restart worldcup-bot
+```
+
+### Backup before ANY manual DB edit
+
+`git pull` is safe. The only thing that changes data is running SQL directly (e.g. the
+one-liners used to clear test bets). **Always copy the DB first:**
+```bash
+cp /opt/worldcup-bet-bot/data/worldcup.db /opt/worldcup-bet-bot/data/worldcup.db.bak
+```
+There is no `sqlite3` CLI installed; inspect/edit the DB via the project's Python instead:
+```bash
+.venv/bin/python3 -c "import db; db.init_db(); print([r[1] for r in db._conn.execute('PRAGMA table_info(matches)')])"
+```
+Note `matches` columns are `match_id`, `home`, `away` (not `id`/`home_team`/`away_team`).
+
+### Deploy gotchas already hit (so you don't re-hit them)
+
+- The systemd unit ships with `User=botuser`; that user doesn't exist → `status=217/USER`.
+  It was changed to `User=root` on the VPS.
+- `init_db()` needs `data/` to exist: `mkdir -p /opt/worldcup-bet-bot/data` before first run.
+- Pasting multi-line blocks over SSH can inject `\r` (`$'\r': command not found`) — paste
+  one line at a time, or use the `cat > file <<'EOF' … EOF` heredoc form.
+
+## 7. Reference
 
 - Data source verified: football-data.org free tier covers all 104 World Cup 2026
   matches (competition id 2000). Stages: GROUP_STAGE / LAST_32 / LAST_16 /
   QUARTER_FINALS / SEMI_FINALS / THIRD_PLACE / FINAL.
-- Next milestone: deploy to the VPS via `deploy/worldcup-bot.service`.
 
-## 7. Current state (what's built)
+## 8. Current state (what's built)
 
 See `README.md` for full command docs and `git log` for the change history. As of the
 latest commit the bot has:
