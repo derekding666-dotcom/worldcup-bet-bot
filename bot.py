@@ -649,7 +649,17 @@ async def postpanel(interaction: discord.Interaction, date: str | None = None):
     posted = 0
     for m in matches:
         embed, view = panels.render(m)
-        msg = await interaction.channel.send(embed=embed, view=view)
+        try:
+            msg = await interaction.channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            # Without a clear reply this just leaves the "thinking…" spinner hanging.
+            extra = f" (Posted {posted} before this.)" if posted else ""
+            await interaction.followup.send(
+                "⛔ I can't post in this channel. Give me **View Channel**, "
+                "**Send Messages** and **Embed Links** permission here, then try again."
+                + extra,
+                ephemeral=True)
+            return
         await asyncio.to_thread(
             db.record_panel, str(interaction.guild_id), str(interaction.channel_id),
             str(msg.id), date, [m["match_id"]])
