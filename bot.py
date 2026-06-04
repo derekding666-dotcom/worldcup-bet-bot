@@ -330,6 +330,42 @@ async def _before_daily():
 
 # ── Player commands ────────────────────────────────────────────────────────
 
+@bot.tree.command(name="help", description="How to play — predictions, leaderboard, and prizes")
+async def help_cmd(interaction: discord.Interaction):
+    """A self-serve how-to. Ephemeral so anyone can summon it without flooding the
+    channel, and name-agnostic so it reads correctly whatever the bot is called."""
+    emb = discord.Embed(
+        title="⚽ How to Play — World Cup Predictions",
+        color=panels.EMBED_COLOR,
+        description=("Predict World Cup matches, climb your server's leaderboard, and win "
+                     "prizes. No football knowledge required — just nerve."),
+    )
+    emb.add_field(
+        name="① Tap to predict",
+        value=("On the daily match panel, tap a button — **winner**, **draw**, or **loser**. "
+               "That's the whole game. Change your pick anytime until kickoff; only you see it."),
+        inline=False,
+    )
+    emb.add_field(
+        name="② Predict ahead — `/bet`",
+        value="Missed the panel? Run `/bet` to pull up upcoming matches privately and predict.",
+        inline=False,
+    )
+    emb.add_field(
+        name="③ Call the champion — `/champion`",
+        value="Pick who lifts the trophy *before* the first kickoff for bonus glory.",
+        inline=False,
+    )
+    emb.add_field(
+        name="④ Track your standing",
+        value=("`/wcleaderboard` — see who's on top (add a **stage** for stage prizes).\n"
+               "`/mybets` — review your own picks and how they did."),
+        inline=False,
+    )
+    emb.set_footer(text="Tip: type / in chat to see every command. Group stage starts June 11.")
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+
 @bot.tree.command(name="wcleaderboard",
                   description="Show this server's World Cup prediction leaderboard")
 @app_commands.describe(top="How many top players to show (default 10)",
