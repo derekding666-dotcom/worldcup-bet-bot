@@ -162,3 +162,23 @@ def test_daily_channel_register_move_clear(db):
     assert db.clear_daily_channel("g1") is True
     assert db.clear_daily_channel("g1") is False  # already gone
     assert {r["guild_id"] for r in db.all_daily_channels()} == {"g2"}
+
+
+def test_temp_roles_add_due_remove(db):
+    from datetime import datetime, timezone, timedelta
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+
+    db.add_temp_role("g1", "u1", "r1", past)     # already expired
+    db.add_temp_role("g1", "u2", "r1", future)   # not yet
+    assert [r["user_id"] for r in db.due_temp_roles(now)] == ["u1"]
+
+    # Re-granting the same (guild,user,role) resets the clock — latest expiry wins.
+    db.add_temp_role("g1", "u1", "r1", future)
+    assert db.due_temp_roles(now) == []
+
+    # Removal forgets just that grant.
+    db.remove_temp_role("g1", "u2", "r1")
+    rows = db._conn.execute("SELECT user_id FROM temp_roles ORDER BY user_id").fetchall()
+    assert [r["user_id"] for r in rows] == ["u1"]

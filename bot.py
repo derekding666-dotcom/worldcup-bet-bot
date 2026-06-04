@@ -82,6 +82,13 @@ def _result_team(match, result: str) -> str:
     return "Draw"
 
 
+def expiry_iso(days: int | None) -> str | None:
+    """ISO-UTC timestamp `days` from now, or None for a permanent grant."""
+    if not days or days <= 0:
+        return None
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+
 class WorldCupBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()  # guilds only; no privileged intents needed
@@ -104,6 +111,7 @@ class WorldCupBot(discord.Client):
         settle_loop.start()
         reveal_loop.start()
         daily_panel_loop.start()
+        expire_roles_loop.start()
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} ({self.user.id})")
@@ -325,6 +333,49 @@ async def daily_panel_loop():
 
 @daily_panel_loop.before_loop
 async def _before_daily():
+    await bot.wait_until_ready()
+
+
+# ── Background: expire temporary roles ─────────────────────────────────────
+#
+# Discord has no native role expiry, so we track (guild, user, role, expires_at)
+# and sweep hourly. Hour-level precision is plenty for day-scale grants. Each
+# removal clears its row only after it actually succeeds (or is moot), so the
+# sweep is idempotent and safe across restarts — including grants that expired
+# while the bot was down.
+
+@tasks.loop(hours=1)
+async def expire_roles_loop():
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for row in await asyncio.to_thread(db.due_temp_roles, now_iso):
+        gid, uid, rid = row["guild_id"], row["user_id"], row["role_id"]
+
+        guild = bot.get_guild(int(gid))
+        if guild is None:
+            await asyncio.to_thread(db.remove_temp_role, gid, uid, rid)  # bot left guild
+            continue
+        role = guild.get_role(int(rid))
+        if role is None:
+            await asyncio.to_thread(db.remove_temp_role, gid, uid, rid)  # role deleted
+            continue
+
+        try:
+            member = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
+            await member.remove_roles(role, reason="World Cup temporary role expired")
+            await asyncio.to_thread(db.remove_temp_role, gid, uid, rid)
+        except discord.NotFound:
+            await asyncio.to_thread(db.remove_temp_role, gid, uid, rid)  # member left
+        except discord.Forbidden:
+            # Permission/hierarchy issue — keep the row and retry next sweep, but flag it.
+            logger.error(f"expire role forbidden: role {rid} from user {uid} in {gid}")
+            await dm_owner(f"⚠️ Couldn't remove expired role <@&{rid}> from <@{uid}> "
+                           "— check the bot's Manage Roles permission & role order.")
+        except Exception as e:
+            logger.error(f"expire role failed for {uid} in {gid}: {e}")
+
+
+@expire_roles_loop.before_loop
+async def _before_expire():
     await bot.wait_until_ready()
 
 
@@ -705,12 +756,14 @@ async def exportwinners(interaction: discord.Interaction, top: int = 20,
 
 @bot.tree.command(description="(Admin) Give a role to the current top N players")
 @app_commands.describe(role="Role to assign", top="How many top players (default 10)",
-                       stage="(Optional) rank by this stage only; default = overall")
+                       stage="(Optional) rank by this stage only; default = overall",
+                       days="(Optional) auto-remove the role this many days after granting")
 @app_commands.choices(stage=STAGE_CHOICES)
 @app_commands.default_permissions(manage_guild=True)
 @server_admin_only()
 async def giverole(interaction: discord.Interaction, role: discord.Role, top: int = 10,
-                   stage: app_commands.Choice[str] | None = None):
+                   stage: app_commands.Choice[str] | None = None,
+                   days: int | None = None):
     if interaction.guild_id is None:
         await interaction.response.send_message("Use this inside a server.", ephemeral=True)
         return
@@ -722,6 +775,7 @@ async def giverole(interaction: discord.Interaction, role: discord.Role, top: in
         await interaction.followup.send("No settled results yet.", ephemeral=True)
         return
 
+    expires_at = expiry_iso(days)
     given, failed = 0, 0
     for r in rows:
         try:
@@ -729,22 +783,29 @@ async def giverole(interaction: discord.Interaction, role: discord.Role, top: in
                 or await interaction.guild.fetch_member(int(r["user_id"]))
             await member.add_roles(role, reason="World Cup prediction winner")
             given += 1
+            if expires_at:
+                await asyncio.to_thread(
+                    db.add_temp_role, gid, str(r["user_id"]), str(role.id), expires_at)
         except Exception as e:
             logger.error(f"giverole failed for {r['user_id']}: {e}")
             failed += 1
 
     label = f" ({stage.name})" if stage else ""
     msg = f"✅ Gave **{role.name}** to {given} player(s){label}."
+    if expires_at:
+        msg += f" ⏳ Auto-removed in {days} day(s)."
     if failed:
         msg += f" ⚠️ {failed} failed (check bot's Manage Roles permission & role order)."
     await interaction.followup.send(msg, ephemeral=True)
 
 
 @bot.tree.command(description="(Admin) List who correctly picked the champion; optionally give them a role")
-@app_commands.describe(role="(Optional) role to give every correct guesser")
+@app_commands.describe(role="(Optional) role to give every correct guesser",
+                       days="(Optional) auto-remove the role this many days after granting")
 @app_commands.default_permissions(manage_guild=True)
 @server_admin_only()
-async def championwinners(interaction: discord.Interaction, role: discord.Role | None = None):
+async def championwinners(interaction: discord.Interaction, role: discord.Role | None = None,
+                         days: int | None = None):
     if interaction.guild_id is None:
         await interaction.response.send_message("Use this inside a server.", ephemeral=True)
         return
@@ -767,6 +828,7 @@ async def championwinners(interaction: discord.Interaction, role: discord.Role |
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["user_id", "display_name", "champion_pick"])
+    expires_at = expiry_iso(days)
     given, failed = 0, 0
     for uid in user_ids:
         name = str(uid)
@@ -782,6 +844,9 @@ async def championwinners(interaction: discord.Interaction, role: discord.Role |
             try:
                 await member.add_roles(role, reason="World Cup champion pick winner")
                 given += 1
+                if expires_at:
+                    await asyncio.to_thread(
+                        db.add_temp_role, gid, str(uid), str(role.id), expires_at)
             except Exception as e:
                 logger.error(f"championwinners role failed for {uid}: {e}")
                 failed += 1
@@ -791,6 +856,8 @@ async def championwinners(interaction: discord.Interaction, role: discord.Role |
     msg = f"🏆 Champion: **{team}** — {len(user_ids)} player(s) called it."
     if role:
         msg += f" Gave **{role.name}** to {given}."
+        if expires_at:
+            msg += f" ⏳ Auto-removed in {days} day(s)."
         if failed:
             msg += f" ⚠️ {failed} failed (check Manage Roles permission & role order)."
     await interaction.followup.send(msg, file=file, ephemeral=True)

@@ -85,6 +85,14 @@ def init_db() -> None:
             created_at TEXT NOT NULL,
             PRIMARY KEY (guild_id, user_id)
         );
+
+        CREATE TABLE IF NOT EXISTS temp_roles (
+            guild_id   TEXT NOT NULL,
+            user_id    TEXT NOT NULL,
+            role_id    TEXT NOT NULL,
+            expires_at TEXT NOT NULL,               -- ISO UTC; removed by the expire loop
+            PRIMARY KEY (guild_id, user_id, role_id)
+        );
         """
     )
 
@@ -419,3 +427,39 @@ def champion_winners(guild_id: str, team: str) -> list[str]:
         (guild_id, team),
     ).fetchall()
     return [r["user_id"] for r in rows]
+
+
+# ── Temporary roles (auto-expire) ──────────────────────────────────────────
+
+def add_temp_role(guild_id: str, user_id: str, role_id: str, expires_at: str) -> None:
+    """Schedule a role to be auto-removed at expires_at (ISO UTC). Re-granting the
+    same role to the same user resets the clock (latest expiry wins)."""
+    with _lock:
+        c = _c()
+        c.execute(
+            """INSERT INTO temp_roles (guild_id, user_id, role_id, expires_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(guild_id, user_id, role_id)
+               DO UPDATE SET expires_at=excluded.expires_at""",
+            (guild_id, user_id, role_id, expires_at),
+        )
+        c.commit()
+
+
+def due_temp_roles(now_iso: str) -> list[sqlite3.Row]:
+    """Temp-role grants whose expiry has passed (ready to be removed)."""
+    return _c().execute(
+        "SELECT * FROM temp_roles WHERE expires_at <= ?", (now_iso,)
+    ).fetchall()
+
+
+def remove_temp_role(guild_id: str, user_id: str, role_id: str) -> None:
+    """Forget a temp-role grant (after the role is removed, or if it's no longer
+    actionable — member left / role deleted / bot removed from guild)."""
+    with _lock:
+        c = _c()
+        c.execute(
+            "DELETE FROM temp_roles WHERE guild_id=? AND user_id=? AND role_id=?",
+            (guild_id, user_id, role_id),
+        )
+        c.commit()
