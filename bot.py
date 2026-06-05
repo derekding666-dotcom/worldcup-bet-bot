@@ -4,9 +4,9 @@ Wires together:
   * Dynamic bet buttons (panels.BetButton) — registered once, survive restarts.
   * Slash commands, in three permission tiers:
       - Everyone:        /bet /wcleaderboard /mybets /champion
-      - Server admin:    /postpanel /setdailychannel /cleardailychannel /exportwinners
-                         /giverole /championwinners  (Manage Server permission; only ever
-                         touch THIS guild's own data)
+      - Server admin:    /postpanel /postleaderboard /setdailychannel /cleardailychannel
+                         /exportwinners /giverole /championwinners  (Manage Server
+                         permission; only ever touch THIS guild's own data)
       - Operator only:   /syncfixtures /setresult  (OWNER_ID; fixtures & results are shared
                          across ALL servers, so a per-guild admin must not change them)
     Player-facing names are namespaced (/bet, /wcleaderboard) to avoid clashing with other
@@ -417,8 +417,37 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
+async def _leaderboard_embed(guild, gid: str, top: int, stages, stage_label=None,
+                             viewer_id: str | None = None) -> discord.Embed:
+    """Build the leaderboard embed — shared by the private player view and the public
+    admin post. Pass viewer_id to append that player's own standing in the footer;
+    omit it for the public post (no personal line)."""
+    rows = await asyncio.to_thread(db.leaderboard, gid, top, stages)
+    # Include the server name so each guild's board is clearly its own.
+    gname = guild.name if guild else "This server"
+    base = f"🏆 {gname} · World Cup Leaderboard"
+    title = f"{base} · {stage_label}" if stage_label else base
+    emb = discord.Embed(title=title[:256], color=panels.EMBED_COLOR)
+    if not rows:
+        emb.description = "No results settled yet. Check back after the first matches finish."
+    else:
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            tag = MEDALS.get(i, f"`#{i}`")
+            lines.append(f"{tag} <@{r['user_id']}> — **{r['score']}** pts "
+                         f"({r['correct']}/{r['settled']} correct)")
+        emb.description = "\n".join(lines)
+    if viewer_id:
+        standing = await asyncio.to_thread(db.user_standing, gid, viewer_id, stages)
+        if standing:
+            emb.set_footer(text=f"You: #{standing['rank']}/{standing['total']} · "
+                                f"{standing['score']} pts · "
+                                f"{standing['correct']}/{standing['settled']} correct")
+    return emb
+
+
 @bot.tree.command(name="wcleaderboard",
-                  description="Show this server's World Cup prediction leaderboard")
+                  description="Show this server's World Cup prediction leaderboard (only you see it)")
 @app_commands.describe(top="How many top players to show (default 10)",
                        stage="(Optional) only this stage's predictions; default = overall")
 @app_commands.choices(stage=STAGE_CHOICES)
@@ -430,29 +459,31 @@ async def leaderboard(interaction: discord.Interaction, top: int = 10,
     gid = str(interaction.guild_id)
     top = max(1, min(top, 25))
     stages = [stage.value] if stage else None
-    rows = await asyncio.to_thread(db.leaderboard, gid, top, stages)
+    emb = await _leaderboard_embed(interaction.guild, gid, top, stages,
+                                   stage_label=stage.name if stage else None,
+                                   viewer_id=str(interaction.user.id))
+    # Ephemeral so any number of players can check standings without flooding the channel.
+    await interaction.response.send_message(embed=emb, ephemeral=True)
 
-    # Include the server name so each guild's board is clearly its own.
-    gname = interaction.guild.name if interaction.guild else "This server"
-    base = f"🏆 {gname} · World Cup Leaderboard"
-    title = f"{base} · {stage.name}" if stage else base
-    emb = discord.Embed(title=title[:256], color=panels.EMBED_COLOR)
-    if not rows:
-        emb.description = "No results settled yet. Check back after the first matches finish."
-    else:
-        lines = []
-        for i, r in enumerate(rows, start=1):
-            tag = MEDALS.get(i, f"`#{i}`")
-            lines.append(f"{tag} <@{r['user_id']}> — **{r['score']}** pts "
-                         f"({r['correct']}/{r['settled']} correct)")
-        emb.description = "\n".join(lines)
 
-    standing = await asyncio.to_thread(db.user_standing, gid, str(interaction.user.id), stages)
-    if standing:
-        emb.set_footer(text=f"You: #{standing['rank']}/{standing['total']} · "
-                            f"{standing['score']} pts · "
-                            f"{standing['correct']}/{standing['settled']} correct")
-    await interaction.response.send_message(embed=emb)
+@bot.tree.command(name="postleaderboard",
+                  description="(Admin) Post the leaderboard publicly to this channel")
+@app_commands.describe(top="How many top players to show (default 10)",
+                       stage="(Optional) only this stage's predictions; default = overall")
+@app_commands.choices(stage=STAGE_CHOICES)
+@app_commands.default_permissions(manage_guild=True)
+async def postleaderboard(interaction: discord.Interaction, top: int = 10,
+                          stage: app_commands.Choice[str] | None = None):
+    if interaction.guild_id is None:
+        await interaction.response.send_message("Use this inside a server.", ephemeral=True)
+        return
+    gid = str(interaction.guild_id)
+    top = max(1, min(top, 25))
+    stages = [stage.value] if stage else None
+    emb = await _leaderboard_embed(interaction.guild, gid, top, stages,
+                                   stage_label=stage.name if stage else None)
+    await interaction.channel.send(embed=emb)
+    await interaction.response.send_message("✅ Leaderboard posted to this channel.", ephemeral=True)
 
 
 @bot.tree.command(description="Show your own predictions and how they did")
