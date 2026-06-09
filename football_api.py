@@ -15,6 +15,7 @@ World Cup: competition code "WC", id 2000.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import aiohttp
@@ -100,9 +101,52 @@ class FootballAPIError(RuntimeError):
     instead of silently skipping a settlement."""
 
 
+# Transient conditions worth retrying. Connection-level aiohttp errors
+# (ClientConnectorError, ServerDisconnectedError, …) all subclass
+# ClientConnectionError; timeouts surface as asyncio.TimeoutError.
+_RETRYABLE_EXC = (aiohttp.ClientConnectionError, asyncio.TimeoutError)
+# HTTP statuses that are the upstream's problem, not ours — safe to retry.
+# Everything else (403 auth, 404, …) is permanent and fails fast.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+async def _get_matches_json(session: aiohttp.ClientSession, url: str,
+                            headers: dict) -> dict:
+    """GET the matches endpoint with bounded retry + exponential backoff on
+    transient blips. Returns parsed JSON. Raises FootballAPIError on a permanent
+    error (immediately) or after all attempts are exhausted — never swallows."""
+    attempts = config.FOOTBALL_RETRY_ATTEMPTS
+    last_err: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with session.get(url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                body = await resp.text()
+                if resp.status == 200:
+                    return json.loads(body)
+                err = FootballAPIError(f"HTTP {resp.status}: {body[:300]}")
+                if resp.status not in _RETRYABLE_STATUS:
+                    raise err  # permanent (e.g. 403 auth) — don't waste retries
+                last_err = err
+        except _RETRYABLE_EXC as e:
+            last_err = e
+
+        if attempt < attempts:
+            backoff = config.FOOTBALL_RETRY_BACKOFF_SEC * (2 ** (attempt - 1))
+            logger.warning(
+                f"football-data.org fetch attempt {attempt}/{attempts} failed "
+                f"({last_err!r}); retrying in {backoff:.0f}s")
+            await asyncio.sleep(backoff)
+
+    raise FootballAPIError(
+        f"all {attempts} attempts failed; last error: {last_err!r}")
+
+
 async def fetch_matches(session: aiohttp.ClientSession | None = None) -> list[dict]:
     """Fetch all World Cup matches and return normalized dicts. Side-effect free
-    beyond the GET. Raises FootballAPIError on failure — never swallows."""
+    beyond the GET. Transient upstream blips (connection resets, timeouts, 429/5xx)
+    are retried with backoff; raises FootballAPIError only after all attempts fail,
+    or immediately on a permanent error like 403 — never swallows."""
     if not config.FOOTBALL_API_KEY:
         raise FootballAPIError("FOOTBALL_API_KEY is not set")
 
@@ -112,12 +156,7 @@ async def fetch_matches(session: aiohttp.ClientSession | None = None) -> list[di
     own_session = session is None
     session = session or aiohttp.ClientSession()
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-            body = await resp.text()
-            if resp.status != 200:
-                raise FootballAPIError(f"HTTP {resp.status}: {body[:300]}")
-            import json
-            data = json.loads(body)
+        data = await _get_matches_json(session, url, headers)
     finally:
         if own_session:
             await session.close()

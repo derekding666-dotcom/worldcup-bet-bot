@@ -23,6 +23,10 @@ FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "").strip()
 # World Cup competition on football-data.org: code "WC", id 2000.
 WC_COMPETITION = os.getenv("WC_COMPETITION", "2000").strip()
 FOOTBALL_BASE_URL = "https://api.football-data.org/v4"
+# Transient upstream blips (connection resets, timeouts, 429/5xx) are retried
+# in-cycle so a single hiccup never aborts a settlement or alerts the owner.
+FOOTBALL_RETRY_ATTEMPTS = int(os.getenv("FOOTBALL_RETRY_ATTEMPTS", "3"))
+FOOTBALL_RETRY_BACKOFF_SEC = float(os.getenv("FOOTBALL_RETRY_BACKOFF_SEC", "1"))
 
 # ── Scoring ────────────────────────────────────────────────────────────────
 POINTS_GROUP = int(os.getenv("POINTS_GROUP", "1"))
