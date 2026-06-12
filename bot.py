@@ -429,6 +429,24 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
+async def _resolve_name(guild, uid: str) -> str:
+    """Resolve a stored user_id to a plain-text display name. We store only IDs, so
+    names are looked up live: cache first, then a REST fetch (works without the
+    members intent). A member who has left can't be resolved → placeholder.
+
+    Plain text, NOT a <@id> mention: a mention inside an embed only renders a name
+    for users the *viewer's* client has cached, so in a big server most fall back to
+    raw `<@id>`. Resolving server-side shows every current member's name reliably.
+    """
+    if guild is not None:
+        try:
+            member = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
+            return discord.utils.escape_markdown(member.display_name)
+        except (discord.DiscordException, ValueError):
+            pass
+    return "departed player"
+
+
 async def _leaderboard_embed(guild, gid: str, top: int, stages, stage_label=None,
                              viewer_id: str | None = None) -> discord.Embed:
     """Build the leaderboard embed — shared by the private player view and the public
@@ -446,7 +464,8 @@ async def _leaderboard_embed(guild, gid: str, top: int, stages, stage_label=None
         lines = []
         for i, r in enumerate(rows, start=1):
             tag = MEDALS.get(i, f"`#{i}`")
-            lines.append(f"{tag} <@{r['user_id']}> — **{r['score']}** pts "
+            name = await _resolve_name(guild, r["user_id"])
+            lines.append(f"{tag} **{name}** — **{r['score']}** pts "
                          f"({r['correct']}/{r['settled']} correct)")
         emb.description = "\n".join(lines)
     if viewer_id:
