@@ -298,7 +298,7 @@ async def post_upcoming_panels(channel, guild_id: str) -> int:
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     upcoming = await asyncio.to_thread(
         db.matches_in_window, now.strftime(fmt), end.strftime(fmt))
-    posted = await asyncio.to_thread(db.posted_match_ids, guild_id)
+    posted = await asyncio.to_thread(db.posted_match_ids, guild_id, str(channel.id))
     fresh = [m for m in upcoming if m["match_id"] not in posted]
     if not fresh:
         return 0

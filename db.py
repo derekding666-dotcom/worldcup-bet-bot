@@ -354,11 +354,14 @@ def all_panels() -> list[sqlite3.Row]:
     return _c().execute("SELECT * FROM panels").fetchall()
 
 
-def posted_match_ids(guild_id: str) -> set[int]:
-    """match_ids that already have a panel in this guild, so the auto-poster never
-    posts the same match twice (across restarts, and regardless of which run did it)."""
+def posted_match_ids(guild_id: str, channel_id: str) -> set[int]:
+    """match_ids that already have a panel in THIS channel, so the auto-poster never
+    posts the same match twice to it (across restarts). Scoped to the channel, not the
+    whole guild: a panel posted to some other channel (e.g. a test/mod channel) must
+    not suppress the match in the registered daily channel."""
     rows = _c().execute(
-        "SELECT match_ids FROM panels WHERE guild_id=?", (guild_id,)).fetchall()
+        "SELECT match_ids FROM panels WHERE guild_id=? AND channel_id=?",
+        (guild_id, channel_id)).fetchall()
     ids: set[int] = set()
     for r in rows:
         ids.update(int(p) for p in r["match_ids"].split(",") if p)

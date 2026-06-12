@@ -189,14 +189,17 @@ def test_daily_channel_register_move_clear(db):
     assert {r["guild_id"] for r in db.all_daily_channels()} == {"g2"}
 
 
-def test_posted_match_ids_dedup_per_guild(db):
+def test_posted_match_ids_dedup_per_channel(db):
     db.upsert_matches([_match(1), _match(2), _match(3)])
-    db.record_panel("g1", "ch", "msg1", "2026-06-11", [1])
-    db.record_panel("g1", "ch", "msg2", "2026-06-12", [2])
-    db.record_panel("g2", "ch", "msg3", "2026-06-11", [3])   # different guild
-    assert db.posted_match_ids("g1") == {1, 2}
-    assert db.posted_match_ids("g2") == {3}
-    assert db.posted_match_ids("g3") == set()                # nothing posted there
+    db.record_panel("g1", "daily", "msg1", "2026-06-11", [1])
+    db.record_panel("g1", "other", "msg2", "2026-06-12", [2])  # same guild, OTHER channel
+    db.record_panel("g2", "daily", "msg3", "2026-06-11", [3])  # different guild
+    # Scoped to (guild, channel): a post to another channel must not count for the
+    # daily channel — otherwise a test/mod-channel post suppresses the real one.
+    assert db.posted_match_ids("g1", "daily") == {1}
+    assert db.posted_match_ids("g1", "other") == {2}
+    assert db.posted_match_ids("g2", "daily") == {3}
+    assert db.posted_match_ids("g1", "nope") == set()
 
 
 def test_temp_roles_add_due_remove(db):
