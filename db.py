@@ -16,14 +16,27 @@ WAL mode lets reads run concurrently with writes.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import config
 
+logger = logging.getLogger(__name__)
+
 _conn: sqlite3.Connection | None = None
 _lock = threading.Lock()  # serialize writes from the executor threads
+
+
+class SyncResult(NamedTuple):
+    """Outcome of an API sync. `newly_settled` = match_ids that went from no-result
+    to a result this sync (broadcast them). `result_conflicts` = (match_id, stored,
+    api) where the API now reports a DIFFERENT result than an already-settled,
+    non-overridden match — kept the stored value, operator should review."""
+    newly_settled: list[int]
+    result_conflicts: list[tuple[int, str, str | None]]
 
 
 def _now_iso() -> str:
@@ -112,13 +125,21 @@ def _c() -> sqlite3.Connection:
 
 # ── Matches ────────────────────────────────────────────────────────────────
 
-def upsert_matches(matches: list[dict]) -> list[int]:
-    """Insert/update fixtures from the API. Returns match_ids whose result just
-    transitioned from unset → set (so the caller can broadcast a settlement).
+def upsert_matches(matches: list[dict]) -> SyncResult:
+    """Insert/update fixtures from the API. See SyncResult for the return value.
 
-    A manually overridden result is never clobbered by the API.
+    Result-field policy (the rest of the row — teams/kickoff/status — always tracks
+    the API, since reschedules are legitimate):
+      * manual_override=1 → the operator's result is authoritative, never touched.
+      * not yet settled (stored result is NULL) → take the API result (first settle).
+      * already settled and the API agrees, or the API momentarily has no result →
+        keep the stored result (a settled result is sticky).
+      * already settled but the API now reports a DIFFERENT result → do NOT silently
+        flip it (that would silently rewrite the leaderboard). Keep the stored value
+        and report a conflict so the operator can apply a correction via /setresult.
     """
     newly_settled: list[int] = []
+    conflicts: list[tuple[int, str, str | None]] = []
     with _lock:
         c = _c()
         for m in matches:
@@ -139,8 +160,21 @@ def upsert_matches(matches: list[dict]) -> list[int]:
                 if api_result is not None:
                     newly_settled.append(m["match_id"])
             else:
-                # Preserve a manual override; otherwise let the API result win.
-                keep_result = row["result"] if row["manual_override"] else api_result
+                stored = row["result"]
+                if row["manual_override"]:
+                    keep_result = stored
+                elif stored is None:
+                    keep_result = api_result                      # first settlement
+                elif api_result == stored or api_result is None:
+                    keep_result = stored                          # settled result is sticky
+                    if api_result is None:
+                        logger.info("match %s: API result temporarily absent; keeping %s",
+                                    m["match_id"], stored)
+                else:
+                    keep_result = stored                          # don't silently flip
+                    conflicts.append((m["match_id"], stored, api_result))
+                    logger.warning("match %s result conflict: stored %s, API now %s — kept stored",
+                                   m["match_id"], stored, api_result)
                 c.execute(
                     """UPDATE matches
                        SET stage=?, stage_detail=?, home=?, away=?, kickoff_utc=?, status=?, result=?
@@ -148,10 +182,10 @@ def upsert_matches(matches: list[dict]) -> list[int]:
                     (m["stage"], m.get("stage_detail"), m["home"], m["away"], m["kickoff_utc"],
                      m["status"], keep_result, m["match_id"]),
                 )
-                if row["result"] is None and keep_result is not None:
+                if stored is None and keep_result is not None:
                     newly_settled.append(m["match_id"])
         c.commit()
-    return newly_settled
+    return SyncResult(newly_settled, conflicts)
 
 
 def set_result_manual(match_id: int, result: str | None) -> bool:

@@ -68,6 +68,31 @@ def test_manual_override_survives_api_sync(db):
     assert db.get_match(1)["result"] == "AWAY"  # correction preserved
 
 
+def test_settled_result_is_sticky_on_conflict(db):
+    # A settled result must not be silently flipped by a later, contradicting API read
+    # (that would silently rewrite the leaderboard). Keep ours, surface a conflict.
+    db.upsert_matches([_match(1, result="HOME", status="FINISHED")])
+    res = db.upsert_matches([_match(1, result="DRAW", status="FINISHED")])  # API now disagrees
+    assert db.get_match(1)["result"] == "HOME"
+    assert res.result_conflicts == [(1, "HOME", "DRAW")]
+    assert res.newly_settled == []
+
+
+def test_settled_result_survives_api_dropout(db):
+    # API momentarily reports no result for an already-settled match → keep ours, no conflict.
+    db.upsert_matches([_match(1, result="HOME", status="FINISHED")])
+    res = db.upsert_matches([_match(1, result=None, status="IN_PLAY")])
+    assert db.get_match(1)["result"] == "HOME"
+    assert res.result_conflicts == []
+
+
+def test_first_settlement_reports_newly_settled(db):
+    db.upsert_matches([_match(1)])              # scheduled, no result yet
+    res = db.upsert_matches([_match(1, result="HOME", status="FINISHED")])
+    assert res.newly_settled == [1]
+    assert res.result_conflicts == []
+
+
 def test_user_standing_rank(db):
     db.upsert_matches([_match(1)])
     db.place_bet("g1", "winner", 1, "HOME")

@@ -195,7 +195,19 @@ async def settle_loop():
         await dm_owner(f"❌ World Cup bot: settlement fetch failed: {e}")
         return
 
-    newly = await asyncio.to_thread(db.upsert_matches, matches)
+    sync = await asyncio.to_thread(db.upsert_matches, matches)
+
+    # The API now contradicts an already-settled result. We kept ours (no silent
+    # leaderboard rewrite); alert the operator to decide via /setresult.
+    for mid, stored, api in sync.result_conflicts:
+        m = await asyncio.to_thread(db.get_match, mid)
+        name = f"{m['home']} vs {m['away']}" if m else f"match {mid}"
+        await dm_owner(
+            f"⚠️ Result conflict for {name} (id {mid}): kept stored **{stored}**, but the "
+            f"API now reports **{api}**. If the API is right, run `/setresult {mid} {api}` "
+            "to apply the correction; otherwise ignore.")
+
+    newly = sync.newly_settled
     if not newly:
         return
 
