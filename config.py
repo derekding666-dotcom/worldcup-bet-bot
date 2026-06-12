@@ -41,6 +41,11 @@ SETTLE_INTERVAL_SEC = int(os.getenv("SETTLE_INTERVAL_SEC", "900"))
 # Hour (UTC, 0–23) at which the bot auto-posts each day's fixtures to channels
 # registered via /setdailychannel. "Today" is the UTC calendar date.
 DAILY_POST_HOUR_UTC = int(os.getenv("DAILY_POST_HOUR_UTC", "9"))
+# Each daily post covers matches kicking off within this many hours, not just the
+# current UTC calendar date. MUST exceed 24 so a match kicking off in the early UTC
+# hours (e.g. a North-American evening game at 02:00 UTC) is already posted by the
+# previous day's run instead of slipping through. Min lead before kickoff = this − 24h.
+PANEL_LOOKAHEAD_HOURS = int(os.getenv("PANEL_LOOKAHEAD_HOURS", "36"))
 
 # ── Feishu export (optional) ───────────────────────────────────────────────
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "").strip()

@@ -288,32 +288,41 @@ async def _before_reveal():
 
 # ── Background: daily auto-post ────────────────────────────────────────────
 
-async def post_day_panels(channel, guild_id: str, date: str) -> int:
-    """Post a rallying intro + one panel per match for `date` (UTC) to `channel`,
-    recording each so the reveal loop can later lock/reveal it. Returns match count
-    (0 = rest day, nothing posted)."""
-    matches = await asyncio.to_thread(db.matches_for_date, date)
-    if not matches:
+async def post_upcoming_panels(channel, guild_id: str) -> int:
+    """Post a rallying intro + one panel per match kicking off within the lookahead
+    window that this guild hasn't posted yet. Driven by kickoff time, not the UTC
+    calendar date, so a match kicking off in the early UTC hours is posted ahead of
+    time instead of being missed. Returns how many were posted (0 = nothing new)."""
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(hours=config.PANEL_LOOKAHEAD_HOURS)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    upcoming = await asyncio.to_thread(
+        db.matches_in_window, now.strftime(fmt), end.strftime(fmt))
+    posted = await asyncio.to_thread(db.posted_match_ids, guild_id)
+    fresh = [m for m in upcoming if m["match_id"] not in posted]
+    if not fresh:
         return 0
-    n = len(matches)
     await channel.send(
-        f"🏆 **Today's World Cup Predictions · {date} (UTC)**\n"
-        f"**{n}** match(es) today — tap the buttons on each to predict. "
-        "You can change your pick until kickoff. Good luck! 👇"
+        f"🏆 **Upcoming World Cup matches** — **{len(fresh)}** to predict. "
+        "Tap the buttons on each to make your call; you can change your pick until "
+        "kickoff. Good luck! 👇"
     )
-    for m in matches:
+    for m in fresh:
         embed, view = panels.render(m)
         msg = await channel.send(embed=embed, view=view)
         await asyncio.to_thread(
-            db.record_panel, guild_id, str(channel.id), str(msg.id), date,
-            [m["match_id"]])
-    return n
+            db.record_panel, guild_id, str(channel.id), str(msg.id),
+            m["kickoff_utc"][:10], [m["match_id"]])
+    return len(fresh)
 
 
 @tasks.loop(seconds=60)
 async def daily_panel_loop():
-    """Once per UTC day, after DAILY_POST_HOUR_UTC, post that day's fixtures to each
-    registered channel. last_posted guards against repeats (incl. across restarts)."""
+    """Once per UTC day, after DAILY_POST_HOUR_UTC, post the upcoming-match panels to
+    each registered channel. The set posted is driven by kickoff time (lookahead
+    window) + per-guild dedup, not the calendar date, so early-UTC-hour matches are
+    never missed. last_posted limits this to one digest per day; dedup prevents any
+    match being posted twice."""
     now = datetime.now(timezone.utc)
     if now.hour < config.DAILY_POST_HOUR_UTC:
         return
@@ -335,9 +344,9 @@ async def daily_panel_loop():
             continue
 
         try:
-            n = await post_day_panels(channel, guild_id, today)
+            n = await post_upcoming_panels(channel, guild_id)
             if n:
-                logger.info(f"daily auto-post: {n} match panel(s) to guild {guild_id} for {today}")
+                logger.info(f"daily auto-post: {n} match panel(s) to guild {guild_id} on {today}")
         except Exception as e:
             logger.exception("daily auto-post failed")
             await dm_owner(f"❌ World Cup bot: daily auto-post failed for guild {guild_id}: {e}")

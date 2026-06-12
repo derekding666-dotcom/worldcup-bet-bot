@@ -354,6 +354,17 @@ def all_panels() -> list[sqlite3.Row]:
     return _c().execute("SELECT * FROM panels").fetchall()
 
 
+def posted_match_ids(guild_id: str) -> set[int]:
+    """match_ids that already have a panel in this guild, so the auto-poster never
+    posts the same match twice (across restarts, and regardless of which run did it)."""
+    rows = _c().execute(
+        "SELECT match_ids FROM panels WHERE guild_id=?", (guild_id,)).fetchall()
+    ids: set[int] = set()
+    for r in rows:
+        ids.update(int(p) for p in r["match_ids"].split(",") if p)
+    return ids
+
+
 def set_panel_locked_rendered(message_id: str, count: int) -> None:
     with _lock:
         c = _c()
